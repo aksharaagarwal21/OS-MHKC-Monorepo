@@ -1,45 +1,63 @@
 """Core LangChain generation logic using Groq LLM."""
 
+import logging
 from core.config import GROQ_API_KEY
 from agents.personas import get_system_prompt
 from core.mock_db import retrieve_context
 
-# Try to use LangChain + Groq if the key is available; otherwise fall back to
-# a simple echo-style response so the app still runs without an API key.
+logger = logging.getLogger(__name__)
 
 _llm = None
 
 if GROQ_API_KEY:
     try:
         from langchain_groq import ChatGroq
-
         _llm = ChatGroq(
-            model="llama3-8b-8192",
+            model="llama3-70b-8192", # Upgraded for better reasoning
             api_key=GROQ_API_KEY,
             temperature=0.7,
         )
-    except Exception:
+    except Exception as e:
+        logger.error(f"Failed to initialize Groq: {e}")
         _llm = None
 
-
-def generate_response(user_message: str, persona: str = "empathy") -> str:
-    """Generate a therapeutic response for *user_message* using *persona*."""
+async def generate_response(user_message: str, persona: str = "empathy", history: list = []) -> str:
+    """
+    Generate a therapeutic response asynchronously.
+    Supports chat history and RAG context injection.
+    """
     system_prompt = get_system_prompt(persona)
     context = retrieve_context(user_message)
 
     if _llm is not None:
-        from langchain_core.messages import SystemMessage, HumanMessage
+        from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 
+        # 1. Start with the System Prompt + RAG Context
         messages = [
-            SystemMessage(content=f"{system_prompt}\n\nContext: {context}"),
-            HumanMessage(content=user_message),
+            SystemMessage(content=f"{system_prompt}\n\nRelevant Wiki Info: {context}")
         ]
-        result = _llm.invoke(messages)
-        return result.content
+
+        # 2. Append history (keeping it slim for speed)
+        for msg in history[-6:]:
+            if msg["role"] == "user":
+                messages.append(HumanMessage(content=msg["content"]))
+            else:
+                messages.append(AIMessage(content=msg["content"]))
+
+        # 3. Append the current message
+        messages.append(HumanMessage(content=user_message))
+
+        try:
+            # Use ainvoke for non-blocking I/O
+            result = await _llm.ainvoke(messages)
+            return result.content
+        except Exception as e:
+            logger.error(f"Groq Inference Error: {e}")
+            return "I'm having a momentary lapse in connection. How else can I support you?"
 
     # Fallback when no API key is configured
     return (
-        f"[{persona.upper()} mode] I hear you. "
+        f"[{persona.upper()} mode] I'm listening. "
         f"You said: \"{user_message}\". "
-        "I'm here to support you — please configure a GROQ_API_KEY for full AI responses."
+        "(Note: Real-time AI is disabled. Please check GROQ_API_KEY environment variable.)"
     )
