@@ -64,3 +64,127 @@ CREATE POLICY "Own messages" ON messages
 ALTER TABLE articles ENABLE ROW LEVEL SECURITY;
 CREATE POLICY "Public articles" ON articles
   FOR SELECT USING (true);
+
+-- ================================
+-- SAFE PATCH START (DO NOT DELETE ABOVE)
+-- ================================
+
+-- Extensions
+CREATE EXTENSION IF NOT EXISTS vector;
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+
+-- Enum
+DO $$ BEGIN
+  CREATE TYPE user_role AS ENUM ('patient', 'doctor', 'admin');
+EXCEPTION
+  WHEN duplicate_object THEN null;
+END $$;
+
+-- Profiles table
+CREATE TABLE IF NOT EXISTS profiles (
+  user_id UUID PRIMARY KEY REFERENCES auth.users(id) ON DELETE CASCADE,
+  username TEXT,
+  role user_role DEFAULT 'patient',
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Patch articles table
+ALTER TABLE articles 
+ADD COLUMN IF NOT EXISTS is_verified BOOLEAN DEFAULT FALSE;
+
+ALTER TABLE articles 
+ADD COLUMN IF NOT EXISTS verified_by UUID REFERENCES profiles(user_id);
+
+-- Chat sessions
+CREATE TABLE IF NOT EXISTS chat_sessions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID REFERENCES auth.users(id),
+  persona_id TEXT,
+  conversation_log JSONB,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Emergency interventions
+CREATE TABLE IF NOT EXISTS emergency_interventions (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  user_id UUID REFERENCES auth.users(id),
+  flagged_content TEXT,
+  created_at TIMESTAMPTZ DEFAULT now()
+);
+
+-- Embeddings table
+CREATE TABLE IF NOT EXISTS wiki_embeddings (
+  id UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+  article_id BIGINT REFERENCES articles(id) ON DELETE CASCADE,
+  embedding VECTOR(1024)
+);
+
+-- Index
+CREATE INDEX IF NOT EXISTS wiki_embedding_index
+ON wiki_embeddings
+USING hnsw (embedding vector_cosine_ops);
+
+-- Match function
+CREATE OR REPLACE FUNCTION match_wiki_articles(
+  query_embedding VECTOR(1024),
+  match_threshold FLOAT
+)
+RETURNS TABLE (
+  article_id BIGINT,
+  similarity FLOAT
+)
+LANGUAGE sql STABLE
+AS $$
+  SELECT
+    we.article_id,
+    1 - (we.embedding <=> query_embedding) AS similarity
+  FROM wiki_embeddings we
+  WHERE 1 - (we.embedding <=> query_embedding) > match_threshold
+  ORDER BY similarity DESC
+  LIMIT 5;
+$$;
+
+-- Enable RLS
+ALTER TABLE profiles ENABLE ROW LEVEL SECURITY;
+ALTER TABLE chat_sessions ENABLE ROW LEVEL SECURITY;
+ALTER TABLE emergency_interventions ENABLE ROW LEVEL SECURITY;
+
+-- Policies
+CREATE POLICY IF NOT EXISTS "Profile self access"
+ON profiles FOR SELECT
+USING (auth.uid() = user_id);
+
+CREATE POLICY IF NOT EXISTS "Own chat sessions"
+ON chat_sessions FOR ALL
+USING (auth.uid() = user_id);
+
+CREATE POLICY IF NOT EXISTS "Admin emergency access"
+ON emergency_interventions FOR SELECT
+USING (
+  EXISTS (
+    SELECT 1 FROM profiles
+    WHERE user_id = auth.uid()
+    AND role = 'admin'
+  )
+);
+
+-- Auto profile creation
+CREATE OR REPLACE FUNCTION handle_new_user()
+RETURNS trigger AS $$
+BEGIN
+  INSERT INTO profiles (user_id)
+  VALUES (NEW.id)
+  ON CONFLICT DO NOTHING;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS on_auth_user_created ON auth.users;
+
+CREATE TRIGGER on_auth_user_created
+AFTER INSERT ON auth.users
+FOR EACH ROW EXECUTE FUNCTION handle_new_user();
+
+-- ================================
+-- SAFE PATCH END
+-- ================================
