@@ -30,6 +30,5 @@ PERSONAS = {
 }
 
 
-def get_system_prompt(persona: str) -> str:
-    """Return the system prompt for a given persona key."""
-    return PERSONAS.get(persona, PERSONAS["empathy"])["system_prompt"]
+def get_system_prompt(persona_id: str) -> str:
+    return SYSTEM_PROMPTS.get(persona_id, SYSTEM_PROMPTS["empathy"])
