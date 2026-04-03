@@ -5,28 +5,39 @@ MOCK_ARTICLES = [
     {
         "id": 1,
         "title": "Understanding Anxiety",
-        "content": "Anxiety is a normal emotion. However, when it becomes chronic...",
-        "tags": ["anxiety", "cbt"],
+        "content": "Anxiety is a normal emotion. For students, it often manifests as physical tension or racing thoughts about the future.",
+        "tags": ["anxiety", "cbt", "stress", "placement", "exam"],
     },
     {
         "id": 2,
         "title": "Mindfulness for Beginners",
-        "content": "Mindfulness is the practice of being present in the moment...",
-        "tags": ["mindfulness", "meditation"],
+        "content": "Mindfulness involves the '5-4-3-2-1' grounding technique: noticing 5 things you see, 4 you can touch, 3 you hear, 2 you smell, and 1 you can taste.",
+        "tags": ["mindfulness", "meditation", "grounding", "panic"],
     },
     {
         "id": 3,
-        "title": "Indian Cultural Perspectives on Mental Health",
-        "content": "In many Indian communities, mental health awareness is growing...",
-        "tags": ["cultural", "india"],
+        "title": "Indian Cultural Perspectives",
+        "content": "In South Asian contexts, communal support and family 'chai sessions' are traditional ways of coping with external academic pressures.",
+        "tags": ["cultural", "india", "family", "pressure", "desi"],
     },
 ]
 
-
 def retrieve_context(query: str) -> str:
-    """Return the first matching article content as context."""
+    """
+    Simulates a vector search by keyword matching.
+    Returns formatted context strings for the LLM to use.
+    """
     query_lower = query.lower()
+    matches = []
+
     for article in MOCK_ARTICLES:
         if any(tag in query_lower for tag in article["tags"]):
-            return article["content"]
-    return MOCK_ARTICLES[0]["content"]
+            # Format with title so the AI knows the source
+            matches.append(f"[{article['title']}]: {article['content']}")
+
+    if not matches:
+        # Default fallback context to ensure the AI always has a 'base' strategy
+        return f"General Info: {MOCK_ARTICLES[0]['content']}"
+
+    # Join multiple matches with newlines
+    return "\n".join(matches)
